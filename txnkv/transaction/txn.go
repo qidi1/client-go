@@ -56,6 +56,7 @@ import (
 	"github.com/tikv/client-go/v2/internal/logutil"
 	"github.com/tikv/client-go/v2/internal/retry"
 	"github.com/tikv/client-go/v2/internal/unionstore"
+	"github.com/tikv/client-go/v2/kv"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/metrics"
 	"github.com/tikv/client-go/v2/tikvrpc"
@@ -119,6 +120,7 @@ type KVTxn struct {
 	scope                   string
 	kvFilter                KVFilter
 	resourceGroupTag        []byte
+	KeyRanges               []kv.KeyRange
 	resourceGroupTagger     tikvrpc.ResourceGroupTagger // use this when resourceGroupTag is nil
 	diskFullOpt             kvrpcpb.DiskFullOpt
 	commitTSUpperBoundCheck func(uint64) bool
@@ -150,6 +152,11 @@ func NewTiKVTxn(store kvstore, snapshot *txnsnapshot.KVSnapshot, startTS uint64,
 
 // SetSuccess is used to probe if kv variables are set or not. It is ONLY used in test cases.
 var SetSuccess = false
+
+func (txn *KVTxn) AddRequestRange(startKey, endKey []byte) {
+	txn.KeyRanges = append(txn.KeyRanges,
+		tikv.KeyRange{StartKey: startKey, EndKey: endKey})
+}
 
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {

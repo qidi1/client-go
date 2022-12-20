@@ -50,7 +50,8 @@ import (
 
 var (
 	// ErrBodyMissing response body is missing error
-	ErrBodyMissing = errors.New("response body is missing")
+	ErrBodyMissing    = errors.New("response body is missing")
+	ErrVertifyReadSet = errors.New("read set is not same")
 	// ErrTiDBShuttingDown is returned when TiDB is closing and send request to tikv fail, do not retry.
 	ErrTiDBShuttingDown = errors.New("tidb server shutting down")
 	// ErrNotExist means the related data not exist.
@@ -157,6 +158,14 @@ func IsErrWriteConflict(err error) bool {
 	return errors.As(err, &e)
 }
 
+type ErrCommitAfterRead struct {
+	*kvrpcpb.CommitAfterRead
+}
+
+func (k *ErrCommitAfterRead) Error() string {
+	return fmt.Sprintf("write conflict { %s }", k.CommitAfterRead.String())
+}
+
 // NewErrWriteConflictWithArgs generates an ErrWriteConflict with args.
 func NewErrWriteConflictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte, reason kvrpcpb.WriteConflict_Reason) *ErrWriteConflict {
 	conflict := kvrpcpb.WriteConflict{
@@ -244,7 +253,7 @@ type ErrAssertionFailed struct {
 	*kvrpcpb.AssertionFailed
 }
 
-// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues`` is not.
+// ErrLockOnlyIfExistsNoReturnValue is used when the flag `LockOnlyIfExists` of `LockCtx` is set, but `ReturnValues“ is not.
 type ErrLockOnlyIfExistsNoReturnValue struct {
 	StartTS     uint64
 	ForUpdateTs uint64
@@ -285,6 +294,10 @@ func ExtractKeyErr(keyErr *kvrpcpb.KeyError) error {
 
 	if keyErr.Conflict != nil {
 		return errors.WithStack(&ErrWriteConflict{WriteConflict: keyErr.GetConflict()})
+	}
+
+	if keyErr.CommitAfterRead != nil {
+		return errors.WithStack(&ErrCommitAfterRead{CommitAfterRead: keyErr.GetCommitAfterRead()})
 	}
 
 	if keyErr.Retryable != "" {

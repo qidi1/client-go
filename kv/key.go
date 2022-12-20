@@ -37,6 +37,11 @@ package kv
 import (
 	"bytes"
 	"encoding/hex"
+	"fmt"
+	"sort"
+	"unsafe"
+
+	"github.com/pingcap/kvproto/pkg/coprocessor"
 )
 
 // NextKey returns the next key in byte-order.
@@ -51,10 +56,10 @@ func NextKey(k []byte) []byte {
 //
 // Assume there are keys like:
 //
-//   rowkey1
-//   rowkey1_column1
-//   rowkey1_column2
-//   rowKey2
+//	rowkey1
+//	rowkey1_column1
+//	rowkey1_column2
+//	rowKey2
 //
 // If we seek 'rowkey1' NextKey, we will get 'rowkey1_column1'.
 // If we seek 'rowkey1' PrefixNextKey, we will get 'rowkey2'.
@@ -91,4 +96,157 @@ func StrKey(k []byte) string {
 type KeyRange struct {
 	StartKey []byte
 	EndKey   []byte
+}
+
+// IsPoint checks if the key range represents a point.
+func (r *KeyRange) IsPoint() bool {
+	if len(r.StartKey) != len(r.EndKey) {
+		// Works like
+		//   return bytes.Equal(r.StartKey.Next(), r.EndKey)
+
+		startLen := len(r.StartKey)
+		return startLen+1 == len(r.EndKey) &&
+			r.EndKey[startLen] == 0 &&
+			bytes.Equal(r.StartKey, r.EndKey[:startLen])
+	}
+	// Works like
+	//   return bytes.Equal(r.StartKey.PrefixNext(), r.EndKey)
+
+	i := len(r.StartKey) - 1
+	for ; i >= 0; i-- {
+		if r.StartKey[i] != 255 {
+			break
+		}
+		if r.EndKey[i] != 0 {
+			return false
+		}
+	}
+	if i < 0 {
+		// In case all bytes in StartKey are 255.
+		return false
+	}
+	// The byte at diffIdx in StartKey should be one less than the byte at diffIdx in EndKey.
+	// And bytes in StartKey and EndKey before diffIdx should be equal.
+	diffOneIdx := i
+	return r.StartKey[diffOneIdx]+1 == r.EndKey[diffOneIdx] &&
+		bytes.Equal(r.StartKey[:diffOneIdx], r.EndKey[:diffOneIdx])
+}
+
+// KeyRanges is like []kv.KeyRange, but may has extra elements at head/tail.
+// It's for avoiding alloc big slice during build copTask.
+type KeyRanges struct {
+	First *KeyRange
+	Mid   []KeyRange
+	Last  *KeyRange
+}
+
+// NewKeyRanges constructs a KeyRanges instance.
+func NewKeyRanges(ranges []KeyRange) *KeyRanges {
+	return &KeyRanges{Mid: ranges}
+}
+
+func (r *KeyRanges) String() string {
+	var s string
+	r.Do(func(ran *KeyRange) {
+		s += fmt.Sprintf("[%q, %q]", ran.StartKey, ran.EndKey)
+	})
+	return s
+}
+
+// Len returns the count of ranges.
+func (r *KeyRanges) Len() int {
+	var l int
+	if r.First != nil {
+		l++
+	}
+	l += len(r.Mid)
+	if r.Last != nil {
+		l++
+	}
+	return l
+}
+
+// At returns the range at the ith position.
+func (r *KeyRanges) At(i int) KeyRange {
+	if r.First != nil {
+		if i == 0 {
+			return *r.First
+		}
+		i--
+	}
+	if i < len(r.Mid) {
+		return r.Mid[i]
+	}
+	return *r.Last
+}
+
+// Slice returns the sub ranges [from, to).
+func (r *KeyRanges) Slice(from, to int) *KeyRanges {
+	var ran KeyRanges
+	if r.First != nil {
+		if from == 0 && to > 0 {
+			ran.First = r.First
+		}
+		if from > 0 {
+			from--
+		}
+		if to > 0 {
+			to--
+		}
+	}
+	if to <= len(r.Mid) {
+		ran.Mid = r.Mid[from:to]
+	} else {
+		if from <= len(r.Mid) {
+			ran.Mid = r.Mid[from:]
+		}
+		if from < to {
+			ran.Last = r.Last
+		}
+	}
+	return &ran
+}
+
+// Do applies a functions to all ranges.
+func (r *KeyRanges) Do(f func(ran *KeyRange)) {
+	if r.First != nil {
+		f(r.First)
+	}
+	for i := range r.Mid {
+		f(&r.Mid[i])
+	}
+	if r.Last != nil {
+		f(r.Last)
+	}
+}
+
+// Split ranges into (left, right) by key.
+func (r *KeyRanges) Split(key []byte) (*KeyRanges, *KeyRanges) {
+	n := sort.Search(r.Len(), func(i int) bool {
+		cur := r.At(i)
+		return len(cur.EndKey) == 0 || bytes.Compare(cur.EndKey, key) > 0
+	})
+	// If a range p contains the key, it will split to 2 parts.
+	if n < r.Len() {
+		p := r.At(n)
+		if bytes.Compare(key, p.StartKey) > 0 {
+			left := r.Slice(0, n)
+			left.Last = &KeyRange{StartKey: p.StartKey, EndKey: key}
+			right := r.Slice(n+1, r.Len())
+			right.First = &KeyRange{StartKey: key, EndKey: p.EndKey}
+			return left, right
+		}
+	}
+	return r.Slice(0, n), r.Slice(n, r.Len())
+}
+
+// ToPBRanges converts ranges to wire type.
+func (r *KeyRanges) ToPBRanges() []*coprocessor.KeyRange {
+	ranges := make([]*coprocessor.KeyRange, 0, r.Len())
+	r.Do(func(ran *KeyRange) {
+		// kv.KeyRange and coprocessor.KeyRange are the same,
+		// so use unsafe.Pointer to avoid allocation here.
+		ranges = append(ranges, (*coprocessor.KeyRange)(unsafe.Pointer(ran)))
+	})
+	return ranges
 }

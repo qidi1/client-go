@@ -62,6 +62,7 @@ const (
 	CmdCommit
 	CmdCleanup
 	CmdBatchGet
+	CmdVertifyReadSet
 	CmdBatchRollback
 	CmdScanLock
 	CmdResolveLock
@@ -135,6 +136,8 @@ func (t CmdType) String() string {
 		return "BatchGet"
 	case CmdBatchRollback:
 		return "BatchRollback"
+	case CmdVertifyReadSet:
+		return "VertifyReadSet"
 	case CmdScanLock:
 		return "ScanLock"
 	case CmdResolveLock:
@@ -320,6 +323,9 @@ func (req *Request) BatchGet() *kvrpcpb.BatchGetRequest {
 // BatchRollback returns BatchRollbackRequest in request.
 func (req *Request) BatchRollback() *kvrpcpb.BatchRollbackRequest {
 	return req.Req.(*kvrpcpb.BatchRollbackRequest)
+}
+func (req *Request) VertifyReadSet() *kvrpcpb.VertifyReadSetRequest {
+	return req.Req.(*kvrpcpb.VertifyReadSetRequest)
 }
 
 // ScanLock returns ScanLockRequest in request.
@@ -538,6 +544,8 @@ func (req *Request) ToBatchCommandsRequest() *tikvpb.BatchCommandsRequest_Reques
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Prewrite{Prewrite: req.Prewrite()}}
 	case CmdCommit:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Commit{Commit: req.Commit()}}
+	case CmdVertifyReadSet:
+		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_VertifyReadSet{VertifyReadSet: req.VertifyReadSet()}}
 	case CmdCleanup:
 		return &tikvpb.BatchCommandsRequest_Request{Cmd: &tikvpb.BatchCommandsRequest_Request_Cleanup{Cleanup: req.Cleanup()}}
 	case CmdBatchGet:
@@ -703,6 +711,8 @@ func SetContext(req *Request, region *metapb.Region, peer *metapb.Peer) error {
 		req.Scan().Context = ctx
 	case CmdPrewrite:
 		req.Prewrite().Context = ctx
+	case CmdVertifyReadSet:
+		req.VertifyReadSet().Context = ctx
 	case CmdPessimisticLock:
 		req.PessimisticLock().Context = ctx
 	case CmdPessimisticRollback:
@@ -807,6 +817,10 @@ func GenRegionErrorResp(req *Request, e *errorpb.Error) (*Response, error) {
 		}
 	case CmdPessimisticLock:
 		p = &kvrpcpb.PessimisticLockResponse{
+			RegionError: e,
+		}
+	case CmdVertifyReadSet:
+		p = &kvrpcpb.VertifyReadSetResponse{
 			RegionError: e,
 		}
 	case CmdPessimisticRollback:
@@ -1003,6 +1017,8 @@ func CallRPC(ctx context.Context, client tikvpb.TikvClient, req *Request) (*Resp
 		resp.Resp, err = client.KvBatchGet(ctx, req.BatchGet())
 	case CmdBatchRollback:
 		resp.Resp, err = client.KvBatchRollback(ctx, req.BatchRollback())
+	case CmdVertifyReadSet:
+		resp.Resp, err = client.VertifyReadSet(ctx, req.VertifyReadSet())
 	case CmdScanLock:
 		resp.Resp, err = client.KvScanLock(ctx, req.ScanLock())
 	case CmdResolveLock:

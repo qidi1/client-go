@@ -64,7 +64,8 @@ func (actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCommit
 }
 
-func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, i interface{}) error {
+	batch := i.(batchMutations)
 	keys := batch.mutations.GetKeys()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
 		StartVersion:  c.startTS,

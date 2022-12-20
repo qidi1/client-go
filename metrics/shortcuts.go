@@ -69,8 +69,8 @@ var (
 	BackoffHistogramEmpty                    prometheus.Observer
 
 	TxnRegionsNumHistogramWithSnapshot         prometheus.Observer
-	TxnRegionsNumHistogramPrewrite             prometheus.Observer
 	TxnRegionsNumHistogramCommit               prometheus.Observer
+	TxnRegionsNumHistogramPrewrite             prometheus.Observer
 	TxnRegionsNumHistogramCleanup              prometheus.Observer
 	TxnRegionsNumHistogramPessimisticLock      prometheus.Observer
 	TxnRegionsNumHistogramPessimisticRollback  prometheus.Observer

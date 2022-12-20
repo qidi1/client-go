@@ -150,7 +150,7 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	req := &kvrpcpb.PrewriteRequest{
 		Mutations:          mutations,
 		PrimaryLock:        c.primary(),
-		StartVersion:       c.startTS,
+		StartVersion:       c.minCommitTS,
 		LockTtl:            ttl,
 		PessimisticActions: pessimisticActions,
 		ForUpdateTs:        c.forUpdateTS,
@@ -191,13 +191,13 @@ func (c *twoPhaseCommitter) buildPrewriteRequest(batch batchMutations, txnSize u
 	return r
 }
 
-func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) (err error) {
+func (action actionPrewrite) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, i interface{}) (err error) {
 	// WARNING: This function only tries to send a single request to a single region, so it don't
 	// need to unset the `useOnePC` flag when it fails. A special case is that when TiKV returns
 	// regionErr, it's uncertain if the request will be splitted into multiple and sent to multiple
 	// regions. It invokes `prewriteMutations` recursively here, and the number of batches will be
 	// checked there.
-
+	batch := i.(batchMutations)
 	if c.sessionID > 0 {
 		if batch.isPrimary {
 			if _, err := util.EvalFailpoint("prewritePrimaryFail"); err == nil {

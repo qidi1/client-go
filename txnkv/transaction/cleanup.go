@@ -58,7 +58,8 @@ func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCleanup
 }
 
-func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, batch batchMutations) error {
+func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *retry.Backoffer, i interface{}) error {
+	batch := i.(batchMutations)
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
 		Keys:         batch.mutations.GetKeys(),
 		StartVersion: c.startTS,

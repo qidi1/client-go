@@ -71,7 +71,7 @@ import (
 const slowRequestThreshold = time.Minute
 
 type twoPhaseCommitAction interface {
-	handleSingleBatch(*twoPhaseCommitter, *retry.Backoffer, batchMutations) error
+	handleSingleBatch(*twoPhaseCommitter, *retry.Backoffer, interface{}) error
 	tiKVTxnRegionsNumHistogram() prometheus.Observer
 	String() string
 }
@@ -1045,7 +1045,11 @@ func (c *twoPhaseCommitter) doActionOnBatches(bo *retry.Backoffer, action twoPha
 		rateLim = config.GetGlobalConfig().CommitterConcurrency
 	}
 	batchExecutor := newBatchExecutor(rateLim, c, action, bo)
-	return batchExecutor.process(batches)
+	iBatch := make([]interface{}, 0)
+	for i := 0; i < len(batches); i++ {
+		iBatch = append(iBatch, batches[i])
+	}
+	return batchExecutor.process(iBatch)
 }
 
 func (c *twoPhaseCommitter) keyValueSize(key, value []byte) int {
@@ -1432,20 +1436,19 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	// all nodes, we have to make sure the commit TS of this transaction is greater
 	// than the snapshot TS of all existent readers. So we get a new timestamp
 	// from PD and plus one as our MinCommitTS.
-	if commitTSMayBeCalculated && c.needLinearizability() {
-		util.EvalFailpoint("getMinCommitTSFromTSO")
-		start := time.Now()
-		latestTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
-		// If we fail to get a timestamp from PD, we just propagate the failure
-		// instead of falling back to the normal 2PC because a normal 2PC will
-		// also be likely to fail due to the same timestamp issue.
-		if err != nil {
-			return err
-		}
-		commitDetail.GetLatestTsTime = time.Since(start)
-		// Plus 1 to avoid producing the same commit TS with previously committed transactions
-		c.minCommitTS = latestTS + 1
+	// 直接使用 minCommitTs 作为 startTs 和 commitTs
+	util.EvalFailpoint("getMinCommitTSFromTSO")
+	start := time.Now()
+	latestTS, err := c.store.GetTimestampWithRetry(bo, c.txn.GetScope())
+	// If we fail to get a timestamp from PD, we just propagate the failure
+	// instead of falling back to the normal 2PC because a normal 2PC will
+	// also be likely to fail due to the same timestamp issue.
+	if err != nil {
+		return err
 	}
+	commitDetail.GetLatestTsTime = time.Since(start)
+	// Plus 1 to avoid producing the same commit TS with previously committed transactions
+	c.minCommitTS = latestTS + 1
 	// Calculate maxCommitTS if necessary
 	if commitTSMayBeCalculated {
 		if err = c.calculateMaxCommitTS(ctx); err != nil {
@@ -1463,10 +1466,9 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 		binlogChan = c.binlog.Prewrite(ctx, c.primary())
 	}
 
-	start := time.Now()
+	start = time.Now()
 
 	err = c.prewriteMutations(bo, c.mutations)
-
 	if err != nil {
 		if assertionFailed, ok := errors.Cause(err).(*tikverr.ErrAssertionFailed); ok {
 			err = c.checkSchemaOnAssertionFail(ctx, assertionFailed)
@@ -1483,7 +1485,11 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return errors.WithStack(tikverr.ErrResultUndetermined)
 		}
 	}
-
+	ranges := SortAndMergeRanges(c.txn.KeyRanges)
+	err = c.vertifyReadSet(bo, actionVertifyReadSet{}, kv.NewKeyRanges(ranges))
+	if err != nil {
+		return errors.WithStack(err)
+	}
 	commitDetail.PrewriteTime = time.Since(start)
 	commitDetail.PrewriteReqNum = c.prewriteTotalReqNum
 	if bo.GetTotalSleep() > 0 {
@@ -2038,7 +2044,7 @@ func (batchExe *batchExecutor) initUtils() error {
 }
 
 // startWork concurrently do the work for each batch considering rate limit
-func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, batches []batchMutations) {
+func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, batches []interface{}) {
 	for idx, batch1 := range batches {
 		waitStart := time.Now()
 		if exit := batchExe.rateLimiter.GetToken(exitCh); !exit {
@@ -2086,7 +2092,7 @@ func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, 
 }
 
 // process will start worker routine and collect results
-func (batchExe *batchExecutor) process(batches []batchMutations) error {
+func (batchExe *batchExecutor) process(batches []interface{}) error {
 	var err error
 	err = batchExe.initUtils()
 	if err != nil {
