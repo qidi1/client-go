@@ -43,7 +43,8 @@ import (
 
 var (
 	// ErrBodyMissing response body is missing error
-	ErrBodyMissing = errors.New("response body is missing")
+	ErrBodyMissing    = errors.New("response body is missing")
+	ErrVertifyReadSet = errors.New("read set is not same")
 	// ErrTiDBShuttingDown is returned when TiDB is closing and send request to tikv fail, do not retry.
 	ErrTiDBShuttingDown = errors.New("tidb server shutting down")
 	// ErrNotExist means the related data not exist.
@@ -140,7 +141,7 @@ func IsErrWriteConflict(err error) bool {
 	return ok
 }
 
-//NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
+// NewErrWriteConfictWithArgs generates an ErrWriteConflict with args.
 func NewErrWriteConfictWithArgs(startTs, conflictTs, conflictCommitTs uint64, key []byte) *ErrWriteConflict {
 	conflict := kvrpcpb.WriteConflict{
 		StartTs:          startTs,

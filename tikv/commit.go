@@ -62,10 +62,12 @@ func (actionCommit) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCommit
 }
 
-func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, inter interface{}) error {
+	batch := inter.(batchMutations)
 	keys := batch.mutations.GetKeys()
 	req := tikvrpc.NewRequest(tikvrpc.CmdCommit, &kvrpcpb.CommitRequest{
-		StartVersion:  c.startTS,
+		// use minCommitTs as txnID
+		StartVersion:  c.minCommitTS,
 		Keys:          keys,
 		CommitVersion: c.commitTS,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag})
@@ -143,22 +145,24 @@ func (actionCommit) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch
 						rejected.MinCommitTs, rejected.AttemptedCommitTs)
 					return errors.Trace(err)
 				}
+				err := errors.Errorf("Cant retry transcation because of vertify read set")
+				return errors.Trace(err)
+				// Dont retry transaction
+				// // Update commit ts and retry.
+				// commitTS, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
+				// if err != nil {
+				// 	logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
+				// 		zap.Error(err),
+				// 		zap.Uint64("txnStartTS", c.startTS))
+				// 	return errors.Trace(err)
+				// }
 
-				// Update commit ts and retry.
-				commitTS, err := c.store.getTimestampWithRetry(bo, c.txn.GetScope())
-				if err != nil {
-					logutil.Logger(bo.GetCtx()).Warn("2PC get commitTS failed",
-						zap.Error(err),
-						zap.Uint64("txnStartTS", c.startTS))
-					return errors.Trace(err)
-				}
-
-				c.mu.Lock()
-				c.commitTS = commitTS
-				c.mu.Unlock()
-				// Update the commitTS of the request and retry.
-				req.Commit().CommitVersion = commitTS
-				continue
+				// c.mu.Lock()
+				// c.commitTS = commitTS
+				// c.mu.Unlock()
+				// // Update the commitTS of the request and retry.
+				// req.Commit().CommitVersion = commitTS
+				// continue
 			}
 
 			c.mu.RLock()

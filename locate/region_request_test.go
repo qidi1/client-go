@@ -490,6 +490,9 @@ func (s *mockTikvGrpcServer) MvccGetByKey(context.Context, *kvrpcpb.MvccGetByKey
 func (s *mockTikvGrpcServer) MvccGetByStartTs(context.Context, *kvrpcpb.MvccGetByStartTsRequest) (*kvrpcpb.MvccGetByStartTsResponse, error) {
 	return nil, errors.New("unreachable")
 }
+func (s *mockTikvGrpcServer) VertifyReadSet(context.Context, *kvrpcpb.VertifyReadSetRequest) (*kvrpcpb.VertifyReadSetResponse, error) {
+	return nil, errors.New("unreachable")
+}
 func (s *mockTikvGrpcServer) SplitRegion(context.Context, *kvrpcpb.SplitRegionRequest) (*kvrpcpb.SplitRegionResponse, error) {
 	return nil, errors.New("unreachable")
 }
@@ -515,6 +518,10 @@ func (s *mockTikvGrpcServer) GetStoreSafeTS(context.Context, *kvrpcpb.StoreSafeT
 }
 
 func (s *mockTikvGrpcServer) RawCompareAndSwap(context.Context, *kvrpcpb.RawCASRequest) (*kvrpcpb.RawCASResponse, error) {
+	return nil, errors.New("unreachable")
+}
+
+func (s *mockTikvGrpcServer) IsAlive(context.Context, *mpp.IsAliveRequest) (*mpp.IsAliveResponse, error) {
 	return nil, errors.New("unreachable")
 }
 

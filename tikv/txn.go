@@ -49,6 +49,7 @@ import (
 	"github.com/pingcap/errors"
 	"github.com/pingcap/kvproto/pkg/kvrpcpb"
 	tikverr "github.com/tikv/client-go/v2/error"
+	"github.com/tikv/client-go/v2/kv"
 	tikv "github.com/tikv/client-go/v2/kv"
 	"github.com/tikv/client-go/v2/logutil"
 	"github.com/tikv/client-go/v2/metrics"
@@ -129,6 +130,7 @@ type KVTxn struct {
 	scope              string
 	kvFilter           KVFilter
 	resourceGroupTag   []byte
+	keyRanges          []kv.KeyRange
 }
 
 // ExtractStartTS use `option` to get the proper startTS for a transaction.
@@ -164,6 +166,11 @@ func newTiKVTxnWithOptions(store *KVStore, options StartTSOption) (*KVTxn, error
 
 // SetSuccess is used to probe if kv variables are set or not. It is ONLY used in test cases.
 var SetSuccess = false
+
+func (txn *KVTxn) AddRequestRange(startKey, endKey []byte) {
+	txn.keyRanges = append(txn.keyRanges,
+		tikv.KeyRange{StartKey: startKey, EndKey: endKey})
+}
 
 // SetVars sets variables to the transaction.
 func (txn *KVTxn) SetVars(vars *tikv.Variables) {

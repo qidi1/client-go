@@ -67,7 +67,7 @@ import (
 const slowRequestThreshold = time.Minute
 
 type twoPhaseCommitAction interface {
-	handleSingleBatch(*twoPhaseCommitter, *Backoffer, batchMutations) error
+	handleSingleBatch(*twoPhaseCommitter, *Backoffer, interface{}) error
 	tiKVTxnRegionsNumHistogram() prometheus.Observer
 	String() string
 }
@@ -630,7 +630,10 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	_, actionIsPessimiticLock := action.(actionPessimisticLock)
 
 	c.checkOnePCFallBack(action, len(batchBuilder.allBatches()))
-
+	allBatches := make([]interface{}, 0)
+	allBatches = append(allBatches, batchBuilder.allBatches())
+	primaryBatch := make([]interface{}, 0)
+	primaryBatch = append(primaryBatch, batchBuilder.primaryBatch())
 	var err error
 	if val, err := util.EvalFailpoint("skipKeyReturnOK"); err == nil {
 		valStr, ok := val.(string)
@@ -639,10 +642,10 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 				logutil.Logger(bo.GetCtx()).Warn("pessimisticLock failpoint", zap.String("valStr", valStr))
 				switch valStr {
 				case "pessimisticLockSkipPrimary":
-					err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
+					err = c.doActionOnBatches(bo, action, allBatches)
 					return err
 				case "pessimisticLockSkipSecondary":
-					err = c.doActionOnBatches(bo, action, batchBuilder.primaryBatch())
+					err = c.doActionOnBatches(bo, action, primaryBatch)
 					return err
 				}
 			}
@@ -659,7 +662,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 	if firstIsPrimary &&
 		((actionIsCommit && !c.isAsyncCommit()) || actionIsCleanup || actionIsPessimiticLock) {
 		// primary should be committed(not async commit)/cleanup/pessimistically locked first
-		err = c.doActionOnBatches(bo, action, batchBuilder.primaryBatch())
+		err = c.doActionOnBatches(bo, action, primaryBatch)
 		if err != nil {
 			return errors.Trace(err)
 		}
@@ -687,7 +690,7 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 				}
 			}
 
-			e := c.doActionOnBatches(secondaryBo, action, batchBuilder.allBatches())
+			e := c.doActionOnBatches(secondaryBo, action, allBatches)
 			if e != nil {
 				logutil.BgLogger().Debug("2PC async doActionOnBatches",
 					zap.Uint64("session", c.sessionID),
@@ -697,13 +700,13 @@ func (c *twoPhaseCommitter) doActionOnGroupMutations(bo *Backoffer, action twoPh
 			}
 		}()
 	} else {
-		err = c.doActionOnBatches(bo, action, batchBuilder.allBatches())
+		err = c.doActionOnBatches(bo, action, allBatches)
 	}
 	return errors.Trace(err)
 }
 
 // doActionOnBatches does action to batches in parallel.
-func (c *twoPhaseCommitter) doActionOnBatches(bo *Backoffer, action twoPhaseCommitAction, batches []batchMutations) error {
+func (c *twoPhaseCommitter) doActionOnBatches(bo *Backoffer, action twoPhaseCommitAction, batches []interface{}) error {
 	if len(batches) == 0 {
 		return nil
 	}
@@ -1060,18 +1063,19 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 	}()
 
 	commitTSMayBeCalculated := false
-	// Check async commit is available or not.
-	if c.checkAsyncCommit() {
-		commitTSMayBeCalculated = true
-		c.setAsyncCommit(true)
-		c.hasTriedAsyncCommit = true
-	}
-	// Check if 1PC is enabled.
-	if c.checkOnePC() {
-		commitTSMayBeCalculated = true
-		c.setOnePC(true)
-		c.hasTriedOnePC = true
-	}
+	// Disable OnePC AND AsyncCommit
+	// // Check async commit is available or not.
+	// if c.checkAsyncCommit() {
+	// 	commitTSMayBeCalculated = true
+	// 	c.setAsyncCommit(true)
+	// 	c.hasTriedAsyncCommit = true
+	// }
+	// // Check if 1PC is enabled.
+	// if c.checkOnePC() {
+	// 	commitTSMayBeCalculated = true
+	// 	c.setOnePC(true)
+	// 	c.hasTriedOnePC = true
+	// }
 
 	// TODO(youjiali1995): It's better to use different maxSleep for different operations
 	// and distinguish permanent errors from temporary errors, for example:
@@ -1132,7 +1136,13 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 			return errors.Trace(terror.ErrResultUndetermined)
 		}
 	}
-
+	if len(c.txn.keyRanges) != 0 {
+		ranges := SortAndMergeRanges(c.txn.keyRanges)
+		err = c.vertifyReadSet(bo, actionVertifyReadSet{}, ranges)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+	}
 	commitDetail := c.getDetail()
 	commitDetail.PrewriteTime = time.Since(start)
 	if bo.GetTotalSleep() > 0 {
@@ -1221,26 +1231,26 @@ func (c *twoPhaseCommitter) execute(ctx context.Context) (err error) {
 				return errors.Trace(err)
 			}
 			if memAmended {
-				// Get new commitTS and check schema valid again.
-				newCommitTS, err := c.getCommitTS(ctx, commitDetail)
-				if err != nil {
-					return errors.Trace(err)
-				}
+				// // Get new commitTS and check schema valid again.
+				// newCommitTS, err := c.getCommitTS(ctx, commitDetail)
+				// if err != nil {
+				// 	return errors.Trace(err)
+				// }
+				commitTs := atomic.LoadUint64(&c.commitTS)
 				// If schema check failed between commitTS and newCommitTs, report schema change error.
-				_, _, err = c.checkSchemaValid(ctx, newCommitTS, relatedSchemaChange.LatestInfoSchema, false)
+				_, _, err = c.checkSchemaValid(ctx, commitTS, relatedSchemaChange.LatestInfoSchema, false)
 				if err != nil {
 					logutil.Logger(ctx).Info("schema check after amend failed, it means the schema version changed again",
 						zap.Uint64("startTS", c.startTS),
 						zap.Uint64("amendTS", commitTS),
 						zap.Int64("amendedSchemaVersion", relatedSchemaChange.LatestInfoSchema.SchemaMetaVersion()),
-						zap.Uint64("newCommitTS", newCommitTS))
+						zap.Uint64("newCommitTS", commitTs))
 					return errors.Trace(err)
 				}
-				commitTS = newCommitTS
 			}
 		}
 	}
-	atomic.StoreUint64(&c.commitTS, commitTS)
+	// atomic.StoreUint64(&c.commitTS, commitTS)
 
 	if c.store.oracle.IsExpired(c.startTS, MaxTxnTimeUse, &oracle.Option{TxnScope: oracle.GlobalTxnScope}) {
 		err = errors.Errorf("session %d txn takes too much time, txnStartTS: %d, comm: %d",
@@ -1671,7 +1681,7 @@ func (batchExe *batchExecutor) initUtils() error {
 }
 
 // startWork concurrently do the work for each batch considering rate limit
-func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, batches []batchMutations) {
+func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, batches []interface{}) {
 	for idx, batch1 := range batches {
 		waitStart := time.Now()
 		if exit := batchExe.rateLimiter.GetToken(exitCh); !exit {
@@ -1719,7 +1729,7 @@ func (batchExe *batchExecutor) startWorker(exitCh chan struct{}, ch chan error, 
 }
 
 // process will start worker routine and collect results
-func (batchExe *batchExecutor) process(batches []batchMutations) error {
+func (batchExe *batchExecutor) process(batches []interface{}) error {
 	var err error
 	err = batchExe.initUtils()
 	if err != nil {

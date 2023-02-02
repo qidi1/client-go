@@ -88,7 +88,8 @@ func (actionPessimisticRollback) tiKVTxnRegionsNumHistogram() prometheus.Observe
 	return metrics.TxnRegionsNumHistogramPessimisticRollback
 }
 
-func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, inter interface{}) error {
+	batch := inter.(batchMutations)
 	m := batch.mutations
 	mutations := make([]*kvrpcpb.Mutation, m.Len())
 	for i := 0; i < m.Len(); i++ {
@@ -247,7 +248,8 @@ func (action actionPessimisticLock) handleSingleBatch(c *twoPhaseCommitter, bo *
 	}
 }
 
-func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionPessimisticRollback) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, inter interface{}) error {
+	batch := inter.(batchMutations)
 	req := tikvrpc.NewRequest(tikvrpc.CmdPessimisticRollback, &kvrpcpb.PessimisticRollbackRequest{
 		StartVersion: c.startTS,
 		ForUpdateTs:  c.forUpdateTS,

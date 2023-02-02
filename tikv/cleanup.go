@@ -56,10 +56,12 @@ func (actionCleanup) tiKVTxnRegionsNumHistogram() prometheus.Observer {
 	return metrics.TxnRegionsNumHistogramCleanup
 }
 
-func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batch batchMutations) error {
+func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, inter interface{}) error {
+	batch := inter.(batchMutations)
 	req := tikvrpc.NewRequest(tikvrpc.CmdBatchRollback, &kvrpcpb.BatchRollbackRequest{
-		Keys:         batch.mutations.GetKeys(),
-		StartVersion: c.startTS,
+		Keys: batch.mutations.GetKeys(),
+		// minCommitTs 作为 txnId 使用
+		StartVersion: c.minCommitTS,
 	}, kvrpcpb.Context{Priority: c.priority, SyncLog: c.syncLog, ResourceGroupTag: c.resourceGroupTag})
 	resp, err := c.store.SendReq(bo, req, batch.region, client.ReadTimeoutShort)
 	if err != nil {
@@ -81,7 +83,7 @@ func (actionCleanup) handleSingleBatch(c *twoPhaseCommitter, bo *Backoffer, batc
 		err = errors.Errorf("session %d 2PC cleanup failed: %s", c.sessionID, keyErr)
 		logutil.BgLogger().Debug("2PC failed cleanup key",
 			zap.Error(err),
-			zap.Uint64("txnStartTS", c.startTS))
+			zap.Uint64("txnStartTS", c.minCommitTS))
 		return errors.Trace(err)
 	}
 	return nil

@@ -46,3 +46,4 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	honnef.co/go/tools v0.2.0 // indirect
 )
+replace github.com/pingcap/kvproto => /root/vscode/tidb-cluster/kvproto
